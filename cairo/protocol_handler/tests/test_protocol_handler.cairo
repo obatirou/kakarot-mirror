@@ -426,3 +426,102 @@ fn test_protocol_handler_unpause_should_pass_after_delay() {
         .build();
     contract_events.assert_emitted(@expected);
 }
+
+#[test]
+#[should_panic(expected: 'Caller is missing role')]
+fn test_protocol_handler_execute_call_should_fail_wrong_caller() {
+    let (protocol_handler, _) = setup_contracts_for_testing();
+
+    // Change caller to random caller address
+    let random_caller = contract_address_const::<'random_caller'>();
+    start_cheat_caller_address(protocol_handler.contract_address, random_caller);
+
+    // Call the protocol handler execute_call, should fail as caller is not operator
+    let call = Call { to: kakarot_mock(), selector: 0, calldata: [].span() };
+    protocol_handler.execute_call(call);
+}
+
+#[test]
+#[should_panic(expected: 'UNAUTHORIZED_SELECTOR')]
+fn test_protocol_handler_execute_call_should_fail_unauthorized_selector() {
+    let (protocol_handler, _) = setup_contracts_for_testing();
+
+    // Change caller to operator
+    start_cheat_caller_address(protocol_handler.contract_address, operator_mock());
+
+    // Construct the Call to a random address
+    let random_called_address = contract_address_const::<'random_called_address'>();
+    let call = Call { to: random_called_address, selector: 0, calldata: [].span() };
+
+    // Call the protocol handler execute_call, should fail as the selector is not authorized
+    protocol_handler.execute_call(call);
+}
+
+#[test]
+#[should_panic(expected: 'ONLY_KAKAROT_CAN_BE_CALLED')]
+fn test_protocol_handler_execute_call_should_fail_wrong_destination() {
+    let (protocol_handler, _) = setup_contracts_for_testing();
+
+    // Change caller to operator
+    start_cheat_caller_address(protocol_handler.contract_address, operator_mock());
+
+    // Construct the Call to kakarot
+    let random_called_address = contract_address_const::<'random_called_address'>();
+    let call = Call {
+        to: random_called_address, selector: selector!("set_native_token"), calldata: [].span()
+    };
+
+    // Call the protocol handler execute_call, should fail as the call is not to Kakarot
+    protocol_handler.execute_call(call);
+}
+
+
+#[test]
+fn test_protocol_handler_execute_call_should_pass() {
+    let (protocol_handler, _) = setup_contracts_for_testing();
+
+    let authorized_selectors = [
+        selector!("set_native_token"),
+        selector!("set_native_token"),
+        selector!("set_base_fee"),
+        selector!("set_coinbase"),
+        selector!("set_prev_randao"),
+        selector!("set_block_gas_limit"),
+        selector!("set_account_contract_class_hash"),
+        selector!("set_uninitialized_account_class_hash"),
+        selector!("set_authorized_cairo_precompile_caller"),
+        selector!("set_cairo1_helpers_class_hash"),
+        selector!("upgrade_account"),
+        selector!("set_authorized_pre_eip155_tx"),
+        selector!("set_l1_messaging_contract_address"),
+    ];
+
+    // Change caller to operator
+    start_cheat_caller_address(protocol_handler.contract_address, operator_mock());
+
+    for selector in authorized_selectors
+        .span() {
+            // Mock the call to Kakarot upgrade function
+            mock_call::<()>(kakarot_mock(), *selector, (), 1);
+
+            // Construct the Call to protocol handler and call execute_call
+            // Should pass as caller is operator and call is to Kakarot
+            let call = Call { to: kakarot_mock(), selector: *selector, calldata: [].span() };
+
+            // Spy on the events
+            let mut spy = spy_events();
+            protocol_handler.execute_call(call);
+
+            // Assert that unpause was called on Kakarot
+            assert_called_with::<()>(kakarot_mock(), *selector, ());
+
+            // Check the ExecuteCall event is emitted
+            let expected = ProtocolHandler::Event::Execution(
+                ProtocolHandler::Execution { call: call }
+            );
+            let contract_events = EventsFilterBuilderTrait::from_events(@spy.get_events())
+                .with_contract_address(protocol_handler.contract_address)
+                .build();
+            contract_events.assert_emitted(@expected);
+        }
+}

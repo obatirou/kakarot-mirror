@@ -50,6 +50,17 @@ pub trait IProtocolHandler<TContractState> {
     /// # Panics
     /// * `Caller is missing role` in case the caller is not the security council
     fn unpause(ref self: TContractState);
+
+    /// Execute a call to the Kakarot contract
+    /// Only the operator can call this function.
+    /// # Arguments
+    /// * `call` - The call to be executed
+    ///
+    /// # Panics
+    /// * `Caller is missing role` in case the caller is not the operator
+    /// * `UNAUTHORIZED_SELECTOR` in case the selector is not authorized
+    /// * `ONLY_KAKAROT_CAN_BE_CALLED` in case the call is not to the Kakarot contract
+    fn execute_call(ref self: TContractState, call: Call);
 }
 
 #[starknet::contract]
@@ -57,11 +68,10 @@ pub mod ProtocolHandler {
     use starknet::event::EventEmitter;
     use starknet::account::Call;
     use starknet::{ContractAddress, ClassHash, get_block_timestamp, SyscallResultTrait};
-    use starknet::storage::{Map, StoragePointerReadAccess, StoragePointerWriteAccess};
+    use starknet::storage::{Map, StoragePointerReadAccess, StoragePointerWriteAccess, StorageMapReadAccess, StorageMapWriteAccess};
     use openzeppelin_access::accesscontrol::AccessControlComponent;
     use openzeppelin_introspection::src5::SRC5Component;
     use crate::kakarot_interface::{IKakarotDispatcher, IKakarotDispatcherTrait};
-
 
     //* ------------------------------------------------------------------------ *//
     //*                                COMPONENTS                                *//
@@ -109,6 +119,7 @@ pub mod ProtocolHandler {
         pub operator: ContractAddress,
         pub guardians: Map<ContractAddress, bool>,
         pub protocol_frozen_until: u64,
+        pub authorized_operator_selector: Map<felt252, bool>,
         #[substorage(v0)]
         accesscontrol: AccessControlComponent::Storage,
         #[substorage(v0)]
@@ -128,6 +139,7 @@ pub mod ProtocolHandler {
         SoftPause: SoftPause,
         HardPause: HardPause,
         Unpause: Unpause,
+        Execution: Execution,
         #[flat]
         AccessControlEvent: AccessControlComponent::Event,
         #[flat]
@@ -162,6 +174,11 @@ pub mod ProtocolHandler {
     #[derive(Drop, starknet::Event)]
     pub struct Unpause {}
 
+    #[derive(Drop, starknet::Event)]
+    pub struct Execution {
+        pub call: Call
+    }
+
     //* ------------------------------------------------------------------------ *//
     //*                                CONSTRUCTOR                               *//
     //* ------------------------------------------------------------------------ *//
@@ -186,6 +203,27 @@ pub mod ProtocolHandler {
         for guardian in guardians {
             self.accesscontrol._grant_role(GUARDIAN_ROLE, *guardian);
         };
+
+        // Store the authorized selectors for the operator
+        self.authorized_operator_selector.write(selector!("set_native_token"), true);
+        self.authorized_operator_selector.write(selector!("set_native_token"), true);
+        self.authorized_operator_selector.write(selector!("set_base_fee"), true);
+        self.authorized_operator_selector.write(selector!("set_coinbase"), true);
+        self.authorized_operator_selector.write(selector!("set_prev_randao"), true);
+        self.authorized_operator_selector.write(selector!("set_block_gas_limit"), true);
+        self.authorized_operator_selector.write(selector!("set_account_contract_class_hash"), true);
+        self
+            .authorized_operator_selector
+            .write(selector!("set_uninitialized_account_class_hash"), true);
+        self
+            .authorized_operator_selector
+            .write(selector!("set_authorized_cairo_precompile_caller"), true);
+        self.authorized_operator_selector.write(selector!("set_cairo1_helpers_class_hash"), true);
+        self.authorized_operator_selector.write(selector!("upgrade_account"), true);
+        self.authorized_operator_selector.write(selector!("set_authorized_pre_eip155_tx"), true);
+        self
+            .authorized_operator_selector
+            .write(selector!("set_l1_messaging_contract_address"), true);
     }
 
     #[abi(embed_v0)]
@@ -290,6 +328,30 @@ pub mod ProtocolHandler {
 
             // Emit Unpause event
             self.emit(Unpause {});
+        }
+
+        //* ------------------------------------------------------------------------ *//
+        //*                           EXECUTE OPERATOR CALL                          *//
+        //* ------------------------------------------------------------------------ *//
+
+        fn execute_call(ref self: ContractState, call: Call) {
+            // Check only operator can call
+            self.accesscontrol.assert_only_role(OPERATOR_ROLE);
+
+            // Ensure the selector to call is part of the authorized selectors
+            let authorized = self.authorized_operator_selector.read(call.selector);
+            assert(authorized, 'UNAUTHORIZED_SELECTOR');
+
+            // Ensure the call is to the Kakarot
+            let kakarot = self.kakarot.read();
+            assert(call.to == kakarot.contract_address, 'ONLY_KAKAROT_CAN_BE_CALLED');
+
+            // Call Kakarot with syscall
+            starknet::syscalls::call_contract_syscall(call.to, call.selector, call.calldata)
+                .unwrap_syscall();
+
+            // Emit Event Execution event
+            self.emit(Execution { call });
         }
     }
 }
