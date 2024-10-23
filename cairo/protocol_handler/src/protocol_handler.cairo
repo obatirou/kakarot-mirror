@@ -51,6 +51,15 @@ pub trait IProtocolHandler<TContractState> {
     /// * `Caller is missing role` in case the caller is not the security council
     fn unpause(ref self: TContractState);
 
+    /// Set the base fee of the Kakarot contract.
+    /// Only the gas price admin can call this function.
+    /// # Arguments
+    /// * `base_fee` - The new base fee
+    ///
+    /// # Panics
+    /// * `Caller is missing role` in case the caller is not the gas price admin
+    fn set_base_fee(ref self: TContractState, new_base_fee: felt252);
+
     /// Execute a call to the Kakarot contract
     /// Only the operator can call this function.
     /// # Arguments
@@ -68,7 +77,10 @@ pub mod ProtocolHandler {
     use starknet::event::EventEmitter;
     use starknet::account::Call;
     use starknet::{ContractAddress, ClassHash, get_block_timestamp, SyscallResultTrait};
-    use starknet::storage::{Map, StoragePointerReadAccess, StoragePointerWriteAccess, StorageMapReadAccess, StorageMapWriteAccess};
+    use starknet::storage::{
+        Map, StoragePointerReadAccess, StoragePointerWriteAccess, StorageMapReadAccess,
+        StorageMapWriteAccess
+    };
     use openzeppelin_access::accesscontrol::AccessControlComponent;
     use openzeppelin_introspection::src5::SRC5Component;
     use crate::kakarot_interface::{IKakarotDispatcher, IKakarotDispatcherTrait};
@@ -93,8 +105,9 @@ pub mod ProtocolHandler {
 
     // Access controls roles
     const SECURITY_COUNCIL_ROLE: felt252 = selector!("SECURITY_COUNCIL_ROLE");
-    const GUARDIAN_ROLE: felt252 = selector!("GUARDIAN_ROLE");
     const OPERATOR_ROLE: felt252 = selector!("OPERATOR_ROLE");
+    const GUARDIAN_ROLE: felt252 = selector!("GUARDIAN_ROLE");
+    const GAS_PRICE_ADMIN_ROLE: felt252 = selector!("GAS_PRICE_ADMIN_ROLE");
     // Pause delay
     pub const SOFT_PAUSE_DELAY: u64 = 12 * 60 * 60; // 12 hours
     pub const HARD_PAUSE_DELAY: u64 = 7 * 24 * 60 * 60; // 7 days
@@ -118,6 +131,7 @@ pub mod ProtocolHandler {
         pub kakarot: IKakarotDispatcher,
         pub operator: ContractAddress,
         pub guardians: Map<ContractAddress, bool>,
+        pub gas_price_admin: ContractAddress,
         pub protocol_frozen_until: u64,
         pub authorized_operator_selector: Map<felt252, bool>,
         #[substorage(v0)]
@@ -139,6 +153,7 @@ pub mod ProtocolHandler {
         SoftPause: SoftPause,
         HardPause: HardPause,
         Unpause: Unpause,
+        BaseFeeChanged: BaseFeeChanged,
         Execution: Execution,
         #[flat]
         AccessControlEvent: AccessControlComponent::Event,
@@ -175,6 +190,11 @@ pub mod ProtocolHandler {
     pub struct Unpause {}
 
     #[derive(Drop, starknet::Event)]
+    pub struct BaseFeeChanged {
+        pub new_base_fee: felt252
+    }
+
+    #[derive(Drop, starknet::Event)]
     pub struct Execution {
         pub call: Call
     }
@@ -189,7 +209,8 @@ pub mod ProtocolHandler {
         kakarot: ContractAddress,
         security_council: ContractAddress,
         operator: ContractAddress,
-        mut guardians: Span<ContractAddress>,
+        gas_price_admin: ContractAddress,
+        mut guardians: Span<ContractAddress>
     ) {
         // Store the Kakarot address
         self.kakarot.write(IKakarotDispatcher { contract_address: kakarot });
@@ -203,11 +224,10 @@ pub mod ProtocolHandler {
         for guardian in guardians {
             self.accesscontrol._grant_role(GUARDIAN_ROLE, *guardian);
         };
+        self.accesscontrol._grant_role(GAS_PRICE_ADMIN_ROLE, gas_price_admin);
 
         // Store the authorized selectors for the operator
         self.authorized_operator_selector.write(selector!("set_native_token"), true);
-        self.authorized_operator_selector.write(selector!("set_native_token"), true);
-        self.authorized_operator_selector.write(selector!("set_base_fee"), true);
         self.authorized_operator_selector.write(selector!("set_coinbase"), true);
         self.authorized_operator_selector.write(selector!("set_prev_randao"), true);
         self.authorized_operator_selector.write(selector!("set_block_gas_limit"), true);
@@ -328,6 +348,18 @@ pub mod ProtocolHandler {
 
             // Emit Unpause event
             self.emit(Unpause {});
+        }
+
+        fn set_base_fee(ref self: ContractState, new_base_fee: felt252) {
+            // Check only gas price admin can call
+            self.accesscontrol.assert_only_role(GAS_PRICE_ADMIN_ROLE);
+
+            // Call the Kakarot set_base_fee function
+            let kakarot = self.kakarot.read();
+            kakarot.set_base_fee(new_base_fee);
+
+            // Emit BaseFeeChanged
+            self.emit(BaseFeeChanged { new_base_fee });
         }
 
         //* ------------------------------------------------------------------------ *//
