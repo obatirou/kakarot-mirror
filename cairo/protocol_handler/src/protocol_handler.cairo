@@ -120,6 +120,7 @@ pub mod ProtocolHandler {
     pub mod errors {
         pub const ONLY_KAKAROT_CAN_BE_CALLED: felt252 = 'ONLY_KAKAROT_CAN_BE_CALLED';
         pub const PROTOCOL_ALREADY_PAUSED: felt252 = 'PROTOCOL_ALREADY_PAUSED';
+        pub const UNAUTHORIZED_SELECTOR: felt252 = 'UNAUTHORIZED_SELECTOR';
     }
 
     //* ------------------------------------------------------------------------ *//
@@ -372,11 +373,11 @@ pub mod ProtocolHandler {
 
             // Ensure the selector to call is part of the authorized selectors
             let authorized = self.authorized_operator_selector.read(call.selector);
-            assert(authorized, 'UNAUTHORIZED_SELECTOR');
+            assert(authorized, errors::UNAUTHORIZED_SELECTOR);
 
             // Ensure the call is to the Kakarot
             let kakarot = self.kakarot.read();
-            assert(call.to == kakarot.contract_address, 'ONLY_KAKAROT_CAN_BE_CALLED');
+            assert(call.to == kakarot.contract_address, errors::ONLY_KAKAROT_CAN_BE_CALLED);
 
             // Call Kakarot with syscall
             starknet::syscalls::call_contract_syscall(call.to, call.selector, call.calldata)
