@@ -547,7 +547,7 @@ fn test_protocol_handler_execute_call_wrong_selector_should_fail() {
 
     for selector in unauthoried_selectors
         .span() {
-            // Mock the call to Kakarot upgrade function
+            // Mock the call to the Kakarot entrypoint
             mock_call::<()>(kakarot_mock(), *selector, (), 1);
 
             // Construct the Call to protocol handler and call execute_call
@@ -589,7 +589,7 @@ fn test_protocol_handler_execute_call_should_pass() {
 
     for selector in authorized_selectors
         .span() {
-            // Mock the call to Kakarot upgrade function
+            // Mock the call to Kakarot entrypoint
             mock_call::<()>(kakarot_mock(), *selector, (), 1);
 
             // Construct the Call to protocol handler and call execute_call
